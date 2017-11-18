@@ -1,0 +1,14 @@
+<launch>                                                                    
+
+	<!-- static transform -->
+	<!--node pkg="tf" type="static_transform_publisher" name="map_2_laser" args="0 0 0 0 0 0 /map /laser 100"/ --> 
+
+    <!-- Visualisation RVIZ -->
+    <node pkg="rviz" type="rviz" name="rviz" />
+
+    <!-- Hokuyo driver for UST-10LX, -135 to 135 deg, 10m range -->
+    <node pkg="urg_node" type="urg_node" name="run_hokuyo_10lx" >
+    <param name="ip_address" value="128.46.112.200" />
+    </node>
+
+</launch>
