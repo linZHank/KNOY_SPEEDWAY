@@ -11,14 +11,14 @@ console_ser = serial.Serial(port = "/dev/ttyACM0", baudrate=115200)
 console_ser.close()
 console_ser.open()
 #construct and send the Ackermann steering commands to rally car 
-console_ser.read()
+console_ser.read(60)
 console_ser.write("IMU1")
 while True:    # time.sleep(0.1)
     if console_ser.inWaiting()>0:
-        read = console_ser.read(20)
+        read = console_ser.read(40)
         #time.sleep(0.2)
         print(read)
-    time.sleep(1)
+    #time.sleep(.5)
 # console_ser.close()
 
 
