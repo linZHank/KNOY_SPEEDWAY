@@ -53,8 +53,8 @@ class WaypointsFollower():
 	self.drive_command = "A+0000+0000"
         self.imu_read = "I+00000+00000+00000U"
         # errors for PD control
-        self.err_pos = 0
-        self.prerr_pos = 0
+        self.err_dist = 0
+        self.prerr_dist = 0
         self.derr_ang = 0
         self.err_ang = 0
         self.prerr_ang = 0
@@ -66,13 +66,6 @@ class WaypointsFollower():
 
         return np.linalg.norm(self.next_waypoint[0:2]-self.current_pose[0:2]) < 0.5 # euclidean distance, ignore oritation difference
 
-    # Generate command to move car to next waypoint 
-    def cmd2NextPoint(self):
-        if self.V_theta < 0: # turn right
-            self.serial_command = "A%05d+%04d" %(self.V_theta*2048/50, 200) # self.V_dist)
-        else: # turn left
-            self.serial_command = "A+%04d+%04d" %(self.V_theta*2048/50, 200) # self.V_dist)
-        # return self.serial _command
 
     def grid2point(self, grid):
         x = (grid[1] - 1023) * 0.05 - 0.025
@@ -105,20 +98,27 @@ class WaypointsFollower():
     def updateCarPose(self):
         ax, ay = self.readIMU()
         ## code for calculate dx, dy, dyaw ##
+        x = vx * dt + x
+        y = vx * dt + y
+        vx = ax * dt + vx
+        vy = ay * dt + vy
 
         self.car_pose += np.array(dx, dy, dyaw)
 
     def computeErrors(self):
-        self.err_pos = np.linalg.norm(self.next_waypoint - self.car_pose[0:2]) # distance error
-        self.derr_pos = self.prerr_pos - self.err_pos # delta distance error
+        ''' Compute error and change of error between car and next waypoint '''
+        self.err_dist = np.linalg.norm(self.next_waypoint - self.car_pose[0:2]) # distance error
+        self.derr_dist = self.prerr_dist - self.err_dist # delta distance error
         self.err_ang = \
         -np.arctan2(self.next_waypoint[1]-self.car_pose[1],
                     self.next_waypoint[0]-self.car_pose[0]) + self.car_pose[2] # orientation error, positive -> turn left
         self.derr_ang = self.prerr_ang - self.err_ang # delta orientation error
         print("err_dist: ", self.err_dist, "derr_dist: ", self.derr_dist)
-        print("err_theta: ", self.err_theta, "derr_theta: ", self.derr_theta)
+        print("err_theta: ", self.err_ang, "derr_theta: ", self.derr_ang)
 
     def computeControl(self):
+        ''' Compute V_turn and V_gas using PD control
+            V = Kp*err + Kd*derr '''
         # move car
         if not self.isNearby():
             # PD control for gas paddle
@@ -151,6 +151,14 @@ class WaypointsFollower():
         else:
             self.serial_command = "A+0000+0000" # generate command to stop at last waypoint
 
+    # Generate command to move the god damn car 
+    def generateCommand(self):
+        ''' Generate serial command according to V_turn and V_gas'''
+        if self.V_turn < 0: # turn right
+            self.serial_command = "A%05d+%04d" %(self.V_turn*2048/50, 200) # self.V_dist)
+        else: # turn left
+            self.serial_command = "A+%04d+%04d" %(self.V_turn*2048/50, 200) # self.V_dist)
+        # return self.serial _command
 
     def drive(self):
         ''' Control car @ 150 Hz '''
@@ -160,7 +168,7 @@ class WaypointsFollower():
         while not rospy.is_shutdown():
             #readIMU() # for debug
             self.updateCarPose() # update car pose from previous time step
-            self.err_pos, self.err_ang, self.derr_pos, self.derr_ang = self.computeErrors() # compute errors
+            self.err_dist, self.err_ang, self.derr_dist, self.derr_ang = self.computeErrors() # compute errors
             self.V_gas, self.V_turn = self.computeControl() # compute control on gas paddle and wheel turning
             self.serial_command = self.generateCommand()
             
