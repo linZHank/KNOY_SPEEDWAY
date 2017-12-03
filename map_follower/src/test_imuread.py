@@ -6,9 +6,11 @@ import serial
 console_ser = serial.Serial(port = "/dev/ttyACM0", baudrate=115200)
 console_ser.close()
 console_ser.open()
-console_ser.read(32)
+initread = console_ser.read(62)
 console_ser.write('IMU0')
 console_ser.write('IMU1')
+#initread = console_ser.read(50)
+print initread
 
 def imu_talker():
     imupub = rospy.Publisher('imu_read', String, queue_size=10)
@@ -16,10 +18,10 @@ def imu_talker():
     rate = rospy.Rate(150) # 10hz
     while not rospy.is_shutdown():
         if console_ser.inWaiting()>0:
-            read = console_ser.read(19)
-	    print("IMU read", read)
-    	rospy.loginfo(read)
-    	imupub.publish(read)
+            imuread = console_ser.read(22)
+	    print("IMU read", imuread)
+    	rospy.loginfo(imuread)
+    	imupub.publish(imuread)
     	rate.sleep()
 
 if __name__ == '__main__':
