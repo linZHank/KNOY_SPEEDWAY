@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from __future__ import print_function
 import rospy
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_msgs.msg import String
@@ -33,10 +34,11 @@ print(imuinfo)
 
 # Static parameters
 WHEELBASE = 0.335 # m
-KP_THETA = 10 # PID: Kp governs turning angle 
-KD_THETA = 4.5 # PID: Kd governs turning angle
-KP_DIST = 500 # PID: Kp governs linear velocity
-KD_DIST = 100  # PID: Kd governs linear velocity
+G = 16384 # gravitational acceleration in IMU reading
+KP_THETA = 4.5 # PID: Kp governs turning angle 
+KD_THETA = 1 # PID: Kd governs turning angle
+KP_DIST = 1000 # PID: Kp governs linear velocity
+KD_DIST = 50  # PID: Kd governs linear velocity
 PUBLISH_RATE = 150.0 # number of control commands to be published per second
 DT = 1 / PUBLISH_RATE # time interval 
 waypointsfile = 'waypoints_1128.txt'
@@ -59,7 +61,9 @@ class WaypointsFollower():
         self.wp_idx = 0 # waypoint index
         self.carpose = np.zeros(3) # [x, y, yaw]
         self.carpose_ref = np.zeros(3) # [x, y, yaw]
-        self.x = 0
+        self.acc_x = 0. # local accerleration regarding to car fixed CS
+        self.acc_y = 0.
+        self.x = 0 # states of the car in global CS
         self.y = 0
         self.phi = 0
         self.xdot = 0
@@ -68,7 +72,7 @@ class WaypointsFollower():
         self.next_waypoint = WPS[0] #self.grid2point(GRID_WP[self.wp_idx]) # convert grid indices into point coordinates
         self.V_gas = 0.
         self.V_turn = 0.
-	self.drive_command = "A+0000+0000"
+	self.serial_command = "A+0000+0000"
         self.imuread = "I+00000+00000+00000U"
         # errors for PD control
         self.err_dist = 0
@@ -94,30 +98,44 @@ class WaypointsFollower():
         self.carpose_ref[0] = data.pose.pose.position.x
         self.carpose_ref[1] = data.pose.pose.position.y
         self.carpose_ref[2] = math.degrees(amcl_euler[2]) # convert rad to degree
-        print("next waypoint: ", self.next_waypoint)
-        print("Reference car pose estimated by AMCL: ", self.carpose_ref)
-        if isNearby(self.carpose_ref, self.carpose, threshold = 1):
+        if isNearby(self.carpose_ref[0:2], self.carpose[0:2], threshold = 1):
             self.carpose = self.carpose_ref
             self.x = self.carpose[0]
             self.y = self.carpose[1]
             self.phi = self.carpose[2]
+            print("---Car pose updated to ", self.carpose_ref, "---")
+        print("next waypoint: ", self.next_waypoint, "waypoint index: ", self.wp_idx)
+        print("Estimated car pose: ", self.carpose)
+        print("Reference car pose estimated by AMCL: ", self.carpose_ref)
+        print("err_dist: ", self.err_dist, "derr_dist: ", self.derr_dist)
+        print("err_theta: ", self.err_ang, "derr_theta: ", self.derr_ang)
+        print("gas paddle control - speed: ", self.V_gas, "\nturning wheel control - angle: ", self.V_turn)
+        print("Serial control string: ", self.serial_command)
+        print("Car pose states: x: ", self.x, "y: ", self.y, "yaw: ", self.phi)
+        print("Car derivative states xdot: ", self.xdot, "ydot: ", self.ydot, "yawdot: ", self.phidot)
+        print(self.imuread)
+        print("local accelerations, acc_x: ", self.acc_x, "acc_y: ", self.acc_y)
+        print("----")
 
     def readIMU(self):
         if console_ser.inWaiting()>0:
             self.imuread = console_ser.read(22)
-        x_acc = 0.# extract x acceleration from imu read
-        y_acc = 0.# extract y acceleration from imu read
-        return x_acc, y_acc
+            self.acc_x = -float(self.imuread[1:7]) / G
+            if self.acc_x < 0.1:
+                self.acc_x = 0.
+            self.acc_y = -float(self.imuread[7:13]) / G
+            if math.fabs(self.acc_y) < 0.1:
+                self.acc_y = 0
 
     def updateCarPose(self, dt = 1./150):
-        ax, ay = self.readIMU()
+        self.readIMU()
         # compute acceleration in global CS
-        xdd = ax*math.cos(math.radians(self.phi)) - ay*math.sin(math.radians(self.phi))
-        ydd = ax*math.sin(math.radians(self.phi)) + ay*math.cos(math.radians(self.phi))
+        xdd = self.acc_x*math.cos(math.radians(self.phi)) - self.acc_y*math.sin(math.radians(self.phi))
+        ydd = self.acc_x*math.sin(math.radians(self.phi)) + self.acc_y*math.cos(math.radians(self.phi))
         # compute car thrust speed
         spd = self.xdot / math.cos(math.radians(self.phi))
         # update car states
-        self.phidot = spd / WHEELBASE * math.tan(math.radians(self.phi))
+        self.phidot = math.degrees(spd / WHEELBASE * math.tan(math.radians(self.phi)))
         self.x += self.xdot * dt
         self.y += self.ydot * dt
         self.phi += self.phidot * dt
@@ -130,55 +148,56 @@ class WaypointsFollower():
         ''' Compute error and change of error between car and next waypoint '''
         self.err_dist = np.linalg.norm(self.next_waypoint - self.carpose[0:2]) # distance error
         self.derr_dist = self.prerr_dist - self.err_dist # delta distance error
-        self.err_ang = self.phi - math.degrees(math.atan2(self.next_waypoint[1]-self.y,
-                                     self.next_waypoint[0]-self.x)) # orientation error, positive -> turn left
+        self.err_ang = self.phi - math.degrees(math.atan2(self.next_waypoint[1] - self.y,
+                                     self.next_waypoint[0]-self.x)) #  orientation error, positive -> turn left
         self.derr_ang = self.prerr_ang - self.err_ang # delta orientation error
-        print("err_dist: ", self.err_dist, "derr_dist: ", self.derr_dist)
-        print("err_theta: ", self.err_ang, "derr_theta: ", self.derr_ang)
         self.prerr_dist = self.err_dist
         self.prerr_ang = self.err_ang
 
     def computeControl(self):
         ''' Compute V_turn and V_gas using PD control
             V = Kp*err + Kd*derr '''
-        # move car
-        if not isNearby(self.carpose[0:2], self.next_waypoint):
+        if not isNearby(self.carpose[0:2], self.next_waypoint) and self.wp_idx < WPS.shape[0]-1:
+            if self.err_ang >= 60 or self.err_ang <= -60:
+                self.wp_idx += 1
+                self.next_waypoint = WPS[self.wp_idx]
+                print("----\nload in next waypoint: ", self.next_waypoint, "----")
+                self.computeErrors()
+                self.derr_dist = 0
+                self.derr_ang = 0
             # PD control for gas paddle
             self.V_gas = KP_DIST*self.err_dist + KD_DIST*self.derr_dist
-            # make sure gas control in range
-            if self.V_gas > 9999:
-                self.V_gas = 2048
-            elif self.V_gas < 0:
-                self.V_gas = 0
             self.V_turn = KP_THETA*self.err_ang + KD_THETA*self.derr_ang
-            # make sure turning in range
-            if self.V_turn > 50:
-                self.V_turn = 50
-            elif self.V_turn < -50:
-                self.V_turn = -50
-            self.generateCommand() # command move car to next waypoint 
-            print("Velocity control - speed: ", self.V_gas, "\nVellocity control - angular: ", self.V_turn)
-            print("Serial control string: ", self.serial_command)
-        elif self.isNearby() and not self.wp_idx == WPS.shape[0]:
+        elif isNearby(self.carpose[0:2], self.next_waypoint) and not self.wp_idx == WPS.shape[0]-1:
             self.wp_idx += 1
-            self.next_waypoint = WPS[self.wp_idx] # self.grid2point(GRID_WP[self.wp_idx]) # update next way point, get ready for next journey
-            self.V_gas = 200
-            self.err_ang = self.phi - math.degrees(math.atan2(self.next_waypoint[1]-self.y,
-                                                   self.next_waypoint[0]-self.x)) # orientation
+            self.next_waypoint = WPS[self.wp_idx]
+            print("----\nload in next waypoint: ", self.next_waypoint, "----")
+            self.computeErrors()
+            self.derr_dist = 0
             self.derr_ang = 0
+            self.V_gas = KP_DIST*self.err_dist + KD_DIST*self.derr_dist
             self.V_turn = KP_THETA*self.err_ang + KD_THETA*self.derr_ang
-            self.generateCommand()
-            print("load in next waypoint: ", self.next_waypoint)
         else:
-            self.serial_command = "A+0000+0000" # generate command to stop at last waypoint
+            self.V_gas = 0
+            self.V_turn = 0
+        # make sure gas control in range
+        if self.V_gas > 9999:
+            self.V_gas = 1024
+        elif self.V_gas < 0:
+            self.V_gas = 0
+        # make sure turning in range
+        if self.V_turn > 50:
+            self.V_turn = 50
+        elif self.V_turn < -50:
+            self.V_turn = -50
+        self.generateCommand()
 
-    # Generate command to move the god damn car 
     def generateCommand(self):
         ''' Generate serial command according to V_turn and V_gas'''
         if self.V_turn < 0: # turn right
-            self.serial_command = "A%05d+%04d" %(self.V_turn*2048/50, 200) # self.V_dist
+            self.serial_command = "A%05d+%04d" %(self.V_turn*2048/50, self.V_gas)
         else: # turn left
-            self.serial_command = "A+%04d+%04d" %(self.V_turn*2048/50, 200) # self.V_dist
+            self.serial_command = "A+%04d+%04d" %(self.V_turn*2048/50, self .V_gas)
 
     def drive(self):
         ''' Control car @ 150 Hz '''
