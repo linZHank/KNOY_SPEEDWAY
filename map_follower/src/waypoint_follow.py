@@ -34,18 +34,18 @@ print(imuinfo)
 
 # Static parameters
 WHEELBASE = 0.335 # m
-G = 16384 # gravitational acceleration in IMU reading
+G = 16384 / 9.81 # gravitational acceleration in IMU reading
 KP_THETA = 4.5 # PID: Kp governs turning angle 
-KD_THETA = 1 # PID: Kd governs turning angle
+KD_THETA = 10 # PID: Kd governs turning angle
 KP_DIST = 1000 # PID: Kp governs linear velocity
-KD_DIST = 50  # PID: Kd governs linear velocity
+KD_DIST = 8000  # PID: Kd governs linear velocity
 PUBLISH_RATE = 150.0 # number of control commands to be published per second
 DT = 1 / PUBLISH_RATE # time interval 
 waypointsfile = 'waypoints_1128.txt'
 WPS = load_wpfile(waypointsfile) # wapoints in numpy array
 
 # Test if two points are close 
-def isNearby(point1, point2, threshold = 0.1):
+def isNearby(point1, point2, threshold = 0.5):
     ''' Test if two points are close to each other '''
     # np.linalg.norm(self.next_waypoint[0:2]-self.current_pose[0:2]) < 0.25
     flag = np.linalg.norm(point1-point2) < threshold
@@ -103,28 +103,28 @@ class WaypointsFollower():
             self.x = self.carpose[0]
             self.y = self.carpose[1]
             self.phi = self.carpose[2]
-            print("---Car pose updated to ", self.carpose_ref, "---")
+            print("~~~Car pose updated by AMCL~~~")
         print("next waypoint: ", self.next_waypoint, "waypoint index: ", self.wp_idx)
         print("Estimated car pose: ", self.carpose)
-        print("Reference car pose estimated by AMCL: ", self.carpose_ref)
-        print("err_dist: ", self.err_dist, "derr_dist: ", self.derr_dist)
-        print("err_theta: ", self.err_ang, "derr_theta: ", self.derr_ang)
-        print("gas paddle control - speed: ", self.V_gas, "\nturning wheel control - angle: ", self.V_turn)
-        print("Serial control string: ", self.serial_command)
+        print("Reference car pose by AMCL: ", self.carpose_ref)
+        print("IMU read: ", self.imuread)
+        print("local accelerations, acc_x: ", self.acc_x, "acc_y: ", self.acc_y)
         print("Car pose states: x: ", self.x, "y: ", self.y, "yaw: ", self.phi)
         print("Car derivative states xdot: ", self.xdot, "ydot: ", self.ydot, "yawdot: ", self.phidot)
-        print(self.imuread)
-        print("local accelerations, acc_x: ", self.acc_x, "acc_y: ", self.acc_y)
-        print("----")
+        print("distance to next waypoint: ", self.err_dist, "derr_dist: ", self.derr_dist)
+        print("angle to next waypoint: ", self.err_ang, "derr_ang: ", self.derr_ang)
+        print("gas paddle control - speed: ", self.V_gas, "turning wheel control - angle: ", self.V_turn)
+        print("Serial control string: ", self.serial_command)
+        print("---------------------------------------------")
 
     def readIMU(self):
         if console_ser.inWaiting()>0:
             self.imuread = console_ser.read(22)
             self.acc_x = -float(self.imuread[1:7]) / G
-            if self.acc_x < 0.1:
+            if math.fabs(self.acc_x) < 0.05:
                 self.acc_x = 0.
             self.acc_y = -float(self.imuread[7:13]) / G
-            if math.fabs(self.acc_y) < 0.1:
+            if math.fabs(self.acc_y) < 0.05:
                 self.acc_y = 0
 
     def updateCarPose(self, dt = 1./150):
@@ -157,29 +157,45 @@ class WaypointsFollower():
     def computeControl(self):
         ''' Compute V_turn and V_gas using PD control
             V = Kp*err + Kd*derr '''
-        if not isNearby(self.carpose[0:2], self.next_waypoint) and self.wp_idx < WPS.shape[0]-1:
-            if self.err_ang >= 60 or self.err_ang <= -60:
+        if not isNearby(self.carpose[0:2], self.next_waypoint) and self.wp_idx < WPS.shape[0]: # car not around next waypoint and more than 1 points are ahead
+            if np.linalg.norm(self.carpose[0:2] - self.next_waypoint) >= np.linalg.norm(self.carpose[0:2] - WPS[self.wp_idx+1]): # car is even closer to the point ahead
                 self.wp_idx += 1
                 self.next_waypoint = WPS[self.wp_idx]
-                print("----\nload in next waypoint: ", self.next_waypoint, "----")
+                print("---waypoint ahead is closer---\nload in next waypoint: ", self.next_waypoint, "----\n")
                 self.computeErrors()
                 self.derr_dist = 0
                 self.derr_ang = 0
-            # PD control for gas paddle
-            self.V_gas = KP_DIST*self.err_dist + KD_DIST*self.derr_dist
-            self.V_turn = KP_THETA*self.err_ang + KD_THETA*self.derr_ang
-        elif isNearby(self.carpose[0:2], self.next_waypoint) and not self.wp_idx == WPS.shape[0]-1:
-            self.wp_idx += 1
-            self.next_waypoint = WPS[self.wp_idx]
-            print("----\nload in next waypoint: ", self.next_waypoint, "----")
+            #elif self.err_ang >= 135 or self.err_ang <= -135: # car needs to turn more than 100 degrees
+             #   self.wp_idx += 1
+              #  self.next_waypoint = WPS[self.wp_idx]
+               # print("---car wants to go back---\nload in next waypoint: ", self.next_waypoint, "----\n")
+               # self.computeErrors()
+               # self.derr_dist = 0
+               # self.derr_ang = 0
+            else:
+                self.computeErrors()
+        elif not isNearby(self.carpose[0:2], self.next_waypoint) and self.wp_idx == WPS.shape[0]-1: # car not around next waypoint and is last waypoint
+            #if self.err_ang >= 135 or self.err_ang <= -135: # car needs to turn more than 100 degrees
+             #   self.wp_idx += 1
+              #  self.next_waypoint = WPS[self.wp_idx]
+               # print("---car wants to go back---\nload in next waypoint: ", self.next_waypoint, "----\n")
+               # self.computeErrors()
+               # self.derr_dist = 0
+               # self.derr_ang = 0
             self.computeErrors()
-            self.derr_dist = 0
-            self.derr_ang = 0
-            self.V_gas = KP_DIST*self.err_dist + KD_DIST*self.derr_dist
-            self.V_turn = KP_THETA*self.err_ang + KD_THETA*self.derr_ang
         else:
-            self.V_gas = 0
-            self.V_turn = 0
+            if self.wp_idx < WPS.shape[0]-1:
+                self.wp_idx += 1
+                self.next_waypoint = WPS[self.wp_idx]
+                print("---car gets close to the waypoint---\nload in next waypoint: ", self.next_waypoint, "----\n")
+                self.computeErrors()
+                self.derr_dist = 0
+                self.derr_ang = 0
+            else:
+               self.clean_shutdown()
+               print("Destination reached!\n---")
+        self.V_gas = KP_DIST*self.err_dist + KD_DIST*self.derr_dist
+        self.V_turn = KP_THETA*self.err_ang + KD_THETA*self.derr_ang
         # make sure gas control in range
         if self.V_gas > 9999:
             self.V_gas = 1024
@@ -207,9 +223,7 @@ class WaypointsFollower():
         while not rospy.is_shutdown():
             #readIMU() # for debug
             self.updateCarPose() # update car pose from previous time step
-            self.computeErrors() # compute errors
             self.computeControl() # compute control on gas paddle and wheel turning
-
             self._ser_cmd_pub.publish(self.serial_command) # publish command
             # rospy.loginfo("serial command published %s", self.scrial_command)
             console_ser.write(self.serial_command) # send out command to serial console

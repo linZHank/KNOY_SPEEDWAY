@@ -13,11 +13,14 @@ console_ser.open()
 #construct and send the Ackermann steering commands to rally car 
 console_ser.read(62)
 console_ser.write("IMU1")
-while True:    # time.sleep(0.1)
+#while True:    # time.sleep(0.1)
+lim = 0
+while lim < 100:
     if console_ser.inWaiting()>0:
         read = console_ser.read(22)
         #time.sleep(0.2)
         print(read)
+        lim += 1
     #time.sleep(.5)
 # console_ser.close()
 
