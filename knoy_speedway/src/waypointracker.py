@@ -31,11 +31,11 @@ def imuCalibration(console_ser):
         if console_ser.inWaiting()>0:
             imu_cali = console_ser.read(22)
             print(imu_cali)
-            calix.append(-float(imu_cali[1:7]))
-            caliy.append(-float(imu_cali[7:13]))
+            calix.append(float(imu_cali[1:7]))
+            caliy.append(float(imu_cali[7:13]))
             lim += 1
     acc_x_ref = sum(calix) / len(calix)
-    acc_y_ref = sum(caliy) / len(caliy)
+    acc_y_ref = 1.5 * sum(caliy) / len(caliy)
     print("\n---IMU calibrated---\n")
     return acc_x_ref, acc_y_ref
 # Enable serial port 
@@ -50,18 +50,19 @@ print(imuinfo)
 # Static parameters
 WHEELBASE = 0.335 # m
 ACC_X_REF, ACC_Y_REF = imuCalibration(console_ser)
+print("ACC_X_REF = ", ACC_X_REF, "ACC_Y_REF = ", ACC_Y_REF)
 G = 16384 / 9.81 # gravitational acceleration in IMU reading
-KP_THETA = .9 # PID: Kp governs turning angle 
-KD_THETA = 1.5 # PID: Kd governs turning angle
+KP_THETA = .95 # PID: Kp governs turning angle 
+KD_THETA = .1 # PID: Kd governs turning angle
 KP_DIST = 125 # PID: Kp governs linear velocity
 KD_DIST = 750  # PID: Kd governs linear velocity
 PUBLISH_RATE = 150.0 # number of control commands to be published per second
 DT = 1 / PUBLISH_RATE # time interval 
-waypointsfile = '/waypointsfiles/handmade_1206.txt'
+waypointsfile = './waypointsfiles/handmade_1208.txt'
 WPS = load_wpfile(waypointsfile) # wapoints in numpy array
 
 # Test if two points are close 
-def isNearby(point1, point2, threshold = 1.25):
+def isNearby(point1, point2, threshold = 1):
     ''' Test if two points are close to each other '''
     # np.linalg.norm(self.next_waypoint[0:2]-self.current_pose[0:2]) < 0.25
     flag = np.linalg.norm(point1-point2) < threshold
@@ -114,21 +115,33 @@ class WaypointsFollower():
         self.carpose_ref[0] = data.pose.pose.position.x
         self.carpose_ref[1] = data.pose.pose.position.y
         self.carpose_ref[2] = math.degrees(amcl_euler[2]) # convert rad to degree
-        if isNearby(self.carpose_ref[0:2], self.carpose[0:2], threshold = 1):
+        if isNearby(self.carpose_ref[0:2], self.carpose[0:2], threshold = 2):
             self.carpose = self.carpose_ref
             self.x = self.carpose[0]
             self.y = self.carpose[1]
             self.phi = self.carpose[2]
-            print("~~~Car pose updated by AMCL~~~")
+            print("~~~Car pose updated by AMCL~~~\n")
+        print("next waypoint: ", self.next_waypoint, "waypoint index: ", self.wp_idx)
+        print("Estimated car pose: ", self.carpose)
+        print("Reference car pose by AMCL: ", self.carpose_ref)
+        print("IMU read: ", self.imuread)
+        print("local accelerations, acc_x: ", self.acc_x, "acc_y: ", self.acc_y)
+        print("Car pose states: x: ", self.x, "y: ", self.y, "yaw: ", self.phi)
+        print("Car derivative states xdot: ", self.xdot, "ydot: ", self.ydot, "yawdot: ", self.phidot)
+        print("distance to next waypoint: ", self.err_dist, "derr_dist: ", self.derr_dist)
+        print("angle to next waypoint: ", self.err_ang, "derr_ang: ", self.derr_ang)
+        print("gas paddle control - speed: ", self.V_gas, "turning wheel control - angle: ", self.V_turn)
+        print("Serial control string: ", self.serial_command)
+        print("------ ---------------------------------------")
 
     def readIMU(self):
         if console_ser.inWaiting()>0:
             self.imuread = console_ser.read(22)
-            self.acc_x = -float(self.imuread[1:7]) / G
-            if self.acc_x < 0.1:
+            self.acc_x = (float(self.imuread[1:7]) - ACC_X_REF) / G
+            if self.acc_x < 0.05:
                 self.acc_x = 0.
-            self.acc_y = -float(self.imuread[7:13]) / G - 0.55
-            if math.fabs(self.acc_y) < 0.1:
+            self.acc_y = (float(self.imuread[7:13]) - ACC_Y_REF) / G
+            if math.fabs(self.acc_y) < 0.05:
                 self.acc_y = 0
 
     def updateCarPose(self, dt = 1./150):
@@ -136,7 +149,6 @@ class WaypointsFollower():
         # compute acceleration in global CS
         xdd = self.acc_x*math.cos(math.radians(self.phi)) - self.acc_y*math.sin(math.radians(self.phi))
         ydd = self.acc_x*math.sin(math.radians(self.phi)) + self.acc_y*math.cos(math.radians(self.phi))
-        print("car acc in map:", (xdd, ydd))
         # compute car thrust speed
         spd = self.xdot / math.cos(math.radians(self.phi))
         # update car states
@@ -178,8 +190,8 @@ class WaypointsFollower():
         self.V_gas = KP_DIST*self.err_dist + KD_DIST*self.derr_dist
         self.V_turn = KP_THETA*self.err_ang + KD_THETA*self.derr_ang
         # make sure gas control in range
-        if self.V_gas > 1024:
-            self.V_gas = 1024
+        if self.V_gas > 800:
+            self.V_gas = 800
         elif self.V_gas < 0:
             self.V_gas = 0
         # make sure turning in range
@@ -208,18 +220,6 @@ class WaypointsFollower():
             self._ser_cmd_pub.publish(self.serial_command) # publish command
             # rospy.loginfo("serial command published %s", self.scrial_command)
             console_ser.write(self.serial_command) # send out command to serial console
-            print("next waypoint: ", self.next_waypoint, "waypoint index: ", self.wp_idx)
-            print("Estimated car pose: ", self.carpose)
-            print("Reference car pose by AMCL: ", self.carpose_ref)
-            print("IMU read: ", self.imuread)
-            print("local accelerations, acc_x: ", self.acc_x, "acc_y: ", self.acc_y)
-            print("Car pose states: x: ", self.x, "y: ", self.y, "yaw: ", self.phi)
-            print("Car derivative states xdot: ", self.xdot, "ydot: ", self.ydot, "yawdot: ", self.phidot)
-            print("distance to next waypoint: ", self.err_dist, "derr_dist: ", self.derr_dist)
-            print("angle to next waypoint: ", self.err_ang, "derr_ang: ", self.derr_ang)
-            print("gas paddle control - speed: ", self.V_gas, "turning wheel control - angle: ", self.V_turn)
-            print("Serial control string: ", self.serial_command)
-            print("---------------------------------------------")
             rate.sleep()
 
     def clean_shutdown(self):
