@@ -49,16 +49,17 @@ print(imuinfo)
 
 # Static parameters
 WHEELBASE = 0.335 # m
-ACC_X_REF, ACC_Y_REF = imuCalibration(console_ser)
+# ACC_X_REF, ACC_Y_REF = imuCalibration(console_ser)
+ACC_X_REF = 0; ACC_Y_REF = 0. # no calibration
 print("ACC_X_REF = ", ACC_X_REF, "ACC_Y_REF = ", ACC_Y_REF)
 G = 16384 / 9.81 # gravitational acceleration in IMU reading
-KP_THETA = .95 # PID: Kp governs turning angle 
-KD_THETA = .1 # PID: Kd governs turning angle
-KP_DIST = 125 # PID: Kp governs linear velocity
-KD_DIST = 750  # PID: Kd governs linear velocity
+KP_THETA = 1.5 # PID: Kp governs steering angle 
+KD_THETA = 7.5 # PID: Kd governs steering angle
+KP_DIST = 360 # PID: Kp governs linear velocity
+KD_DIST = 100  # PID: Kd governs linear velocity
 PUBLISH_RATE = 150.0 # number of control commands to be published per second
 DT = 1 / PUBLISH_RATE # time interval 
-waypointsfile = './waypointsfiles/handmade_1208.txt'
+waypointsfile = './waypointsfiles/handmade_1210.txt'
 WPS = load_wpfile(waypointsfile) # wapoints in numpy array
 
 # Test if two points are close 
@@ -71,9 +72,6 @@ def isNearby(point1, point2, threshold = 1):
 class WaypointsFollower():
     '''Class defines rallycar maneuvering along a set of waypoints'''
     def __init__(self):
-        # methods
-        self._ser_cmd_pub = rospy.Publisher('/serial_command', String, queue_size =1)
-        self._sub = rospy.Subscriber('amcl_pose', PoseWithCovarianceStamped, self.amclCB)
         # parameters
         self.wp_idx = 0 # waypoint index
         self.carpose = np.zeros(3) # [x, y, yaw]
@@ -87,8 +85,8 @@ class WaypointsFollower():
         self.ydot = 0
         self.phidot = 0
         self.next_waypoint = WPS[0] #self.grid2point(GRID_WP[self.wp_idx]) # convert grid indices into point coordinates
-        self.V_gas = 0.
-        self.V_turn = 0.
+        self.V_throttle = 0.
+        self.V_steer = 0.
 	self.serial_command = "A+0000+0000"
         self.imuread = "I+00000+00000+00000U"
         # errors for PD control
@@ -98,15 +96,13 @@ class WaypointsFollower():
         self.err_ang = 0
         self.prerr_ang = 0.
         self.derr_ang = 0.
-
-    #def grid2point(self, grid):
-        #x = (grid[1] - 1023) * 0.05 - 0.025
-        #y = (grid[0] - 1023) * 0.05 - 0.025
-        #wp = np.array([x, y])
-        #return wp
+        # methods
+        self._sub = rospy.Subscriber('amcl_pose', PoseWithCovarianceStamped, self.amclCB)
+        self._ser_cmd_pub = rospy.Publisher('/serial_command', String, queue_size =1)
 
     def amclCB(self, data):
         ''' Callback function for amcl '''
+        rospy.loginfo("\n~~~AMCL comes in !!!~~~\n")
         # current pose [X, Y, yaw]
         amcl_quaterion = (data.pose.pose.orientation.x,
                     data.pose.pose.orientation.y, data.pose.pose.orientation.z,
@@ -115,44 +111,39 @@ class WaypointsFollower():
         self.carpose_ref[0] = data.pose.pose.position.x
         self.carpose_ref[1] = data.pose.pose.position.y
         self.carpose_ref[2] = math.degrees(amcl_euler[2]) # convert rad to degree
-        if isNearby(self.carpose_ref[0:2], self.carpose[0:2], threshold = 2):
+        rospy.loginfo("\n~~~AMCL reference set~~~\n")
+        if isNearby(self.carpose_ref[:2], self.carpose[:2], threshold = 10):
             self.carpose = self.carpose_ref
             self.x = self.carpose[0]
             self.y = self.carpose[1]
             self.phi = self.carpose[2]
-            print("~~~Car pose updated by AMCL~~~\n")
-        print("next waypoint: ", self.next_waypoint, "waypoint index: ", self.wp_idx)
-        print("Estimated car pose: ", self.carpose)
-        print("Reference car pose by AMCL: ", self.carpose_ref)
-        print("IMU read: ", self.imuread)
-        print("local accelerations, acc_x: ", self.acc_x, "acc_y: ", self.acc_y)
-        print("Car pose states: x: ", self.x, "y: ", self.y, "yaw: ", self.phi)
-        print("Car derivative states xdot: ", self.xdot, "ydot: ", self.ydot, "yawdot: ", self.phidot)
-        print("distance to next waypoint: ", self.err_dist, "derr_dist: ", self.derr_dist)
-        print("angle to next waypoint: ", self.err_ang, "derr_ang: ", self.derr_ang)
-        print("gas paddle control - speed: ", self.V_gas, "turning wheel control - angle: ", self.V_turn)
-        print("Serial control string: ", self.serial_command)
-        print("------ ---------------------------------------")
+            rospy.loginfo("\n~~~Car pose updated by AMCL~~~\n")
+        print("\n~~~Estimated car pose: ", self.carpose, "~~~\n")
+        print("\n~~~Reference car pose by AMCL: ", self.carpose_ref, "~~~\n")
+        print("\n~~~Driving towards waypoint %d: " % (self.wp_idx), self.next_waypoint, "~~~\n")
 
     def readIMU(self):
         if console_ser.inWaiting()>0:
             self.imuread = console_ser.read(22)
+            print("IMU read: ", self.imuread)
             self.acc_x = (float(self.imuread[1:7]) - ACC_X_REF) / G
-            if self.acc_x < 0.05:
+            if math.fabs(self.acc_x) < 0.05:
                 self.acc_x = 0.
             self.acc_y = (float(self.imuread[7:13]) - ACC_Y_REF) / G
-            if math.fabs(self.acc_y) < 0.05:
+            if math.fabs(self.acc_y) < 0.25:
                 self.acc_y = 0
 
-    def updateCarPose(self, dt = 1./150):
+    def updateCarPose(self, dt = 1 / PUBLISH_RATE):
         self.readIMU()
         # compute acceleration in global CS
         xdd = self.acc_x*math.cos(math.radians(self.phi)) - self.acc_y*math.sin(math.radians(self.phi))
         ydd = self.acc_x*math.sin(math.radians(self.phi)) + self.acc_y*math.cos(math.radians(self.phi))
         # compute car thrust speed
-        spd = self.xdot / math.cos(math.radians(self.phi))
+        # spd = self.xdot / math.cos(math.radians(self.phi)) # option(1)
+        spd = self.acc_x*dt # option(2)
         # update car states
-        self.phidot = math.degrees(spd / WHEELBASE * math.tan(math.radians(self.phi)))
+        self.phidot = math.degrees(spd / WHEELBASE * math.tan(math.radians(self.V_steer*50/2048))) # option(1)
+        # self.phidot = math.degrees(V_throttle / WHEELBASE * math.tan(math.radians(self.V_steer))) # option(2)
         self.x += self.xdot * dt
         self.y += self.ydot * dt
         self.phi += self.phidot * dt
@@ -172,7 +163,7 @@ class WaypointsFollower():
         self.prerr_ang = self.err_ang
 
     def computeControl(self):
-        ''' Compute V_turn and V_gas using PD control
+        ''' Compute V_steer and V_throttle using PD control
             V = Kp*err + Kd*derr '''
         if not isNearby(self.carpose[0:2], self.next_waypoint):
             self.computeErrors()
@@ -187,40 +178,59 @@ class WaypointsFollower():
             else:
                self.clean_shutdown()
                print("Destination reached!\n---")
-        self.V_gas = KP_DIST*self.err_dist + KD_DIST*self.derr_dist
-        self.V_turn = KP_THETA*self.err_ang + KD_THETA*self.derr_ang
+        self.V_throttle = KP_DIST*self.err_dist + KD_DIST*self.derr_dist
+        self.V_steer = KP_THETA*self.err_ang + KD_THETA*self.derr_ang
         # make sure gas control in range
-        if self.V_gas > 800:
-            self.V_gas = 800
-        elif self.V_gas < 0:
-            self.V_gas = 0
-        # make sure turning in range
-        if self.V_turn > 50:
-            self.V_turn = 50
-        elif self.V_turn < -50:
-            self.V_turn = -50
+        if self.V_throttle > 360:
+            self.V_throttle = 360
+        elif self.V_throttle < 0:
+            self.V_throttle = 0
+        # make sure steering in range
+        if self.V_steer > 50:
+            self.V_steer = 50
+        elif self.V_steer < -50:
+            self.V_steer = -50
         self.generateCommand()
 
     def generateCommand(self):
-        ''' Generate serial command according to V_turn and V_gas'''
-        if self.V_turn < 0: # turn right
-            self.serial_command = "A%05d+%04d" %(self.V_turn*2048/50, self.V_gas)
+        ''' Generate serial command according to V_steer and V_throttle'''
+        if self.V_steer < 0: # turn right
+            self.serial_command = "A%05d+%04d" %(self.V_steer*2048/50, self.V_throttle)
         else: # turn left
-            self.serial_command = "A+%04d+%04d" %(self.V_turn*2048/50, self .V_gas)
+            self.serial_command = "A+%04d+%04d" %(self.V_steer*2048/50, self .V_throttle)
 
     def drive(self):
         ''' Control car @ 150 Hz '''
         rate = rospy.Rate(PUBLISH_RATE)
         print("Publishing serial command @ 150 Hz. Press Ctrl-C to stop...")
-
+        counter = 0
         while not rospy.is_shutdown():
-            #readIMU() # for debug
-            self.computeControl() # compute control on gas paddle and wheel turning
+            self.computeControl() # compute control on gas paddle and wheel steering
+
+            if counter % 5 == 0: # print estimated car pose and other debugging information @ frequency of 30 Hz
+                rospy.loginfo(">>>>>>>>> Estimated Car States @ counter: %04d ---" % (counter))
+                print("Driving towards the waypoint %d: " % (self.wp_idx), self.next_waypoint)
+                print("Car pose, x: ", self.x, "y: ", self.y, "yaw: ", self.phi)
+                print("Car pose changing rate, xdot: ", self.xdot, "ydot: ", self.ydot, "yawdot: ", self.phidot)
+                print("Car longitudinal accelerations: ", self.acc_x, "Car transverse acceleration: ", self.acc_y)
+                print("distance to next waypoint: ", self.err_dist, "derr_dist: ", self.derr_dist)
+                print("angle to next waypoint: ", self.err_ang, "derr_ang: ", self.derr_ang)
+                print("Speed control - throttle: ", self.V_throttle, "Steering wheel control - steer: ", self.V_steer)
+                print("Serial control string: ", self.serial_command)
+                print("----")
+
             self.updateCarPose() # update car pose from previous time step
+
+            if counter % 5 == 0: # print updated car pose information
+                print("Updated car states >>>>>>>>>")
+                print("Car pose, x: ", self.x, "y: ", self.y, "yaw: ", self.phi)
+                print("Car pose changing rate, xdot: ", self.xdot, "ydot: ", self.ydot, "yawdot: ", self.phidot)
+
             self._ser_cmd_pub.publish(self.serial_command) # publish command
             # rospy.loginfo("serial command published %s", self.scrial_command)
             console_ser.write(self.serial_command) # send out command to serial console
             rate.sleep()
+            counter += 1
 
     def clean_shutdown(self):
         print("\n\nTurning off the car...")
