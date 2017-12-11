@@ -55,11 +55,9 @@ WHEELBASE = 0.335 # m
 ACC_X_REF = 0; ACC_Y_REF = 0. # no calibration
 BASE_LINE = 0.5
 G = 16384 / 9.81 # gravitational acceleration in IMU reading
-KP_WF = 100 # wall following PID: Kp governs steering angle
-KD_WF = 5 # wall following PID: Kd
-KP_THETA = .5 # waypoint tracking PID: Kp governs steering angle 
-KD_THETA = 25 # waypoint tracking PID: Kd governs steering angle
-KP_DIST = 360 # waypoint tracking PID: Kp governs linear velocity
+KP_THETA = .15 # waypoint tracking PID: Kp governs steering angle 
+KD_THETA = 55 # waypoint tracking PID: Kd governs steering angle
+KP_DIST = 300 # waypoint tracking PID: Kp governs linear velocity
 KD_DIST = 100  # waypoint tracking PID: Kd governs linear velocity
 PUBLISH_RATE = 150.0 # number of control commands to be published per second
 DT = 1 / PUBLISH_RATE # time interval 
@@ -76,17 +74,6 @@ def isNearby(point1, point2, threshold = 1):
 class WaypointsFollower():
     '''Class defines rallycar maneuvering along a set of waypoints'''
     def __init__(self):
-        # Wall follow parameters
-        self.scan_range = [float('inf')] * 1081
-        self.meanrange_n30p30 = float('inf')
-        self.dist2wall_left = float('inf')
-        self.dist2wall_right = float('inf')
-        self.err_left = 0
-        self.derr_left = 0
-        self.prerr_left = 0
-        self.err_right = 0
-        self.derr_right = 0
-        self.prerr_right = 0
         # Waypoint tracking parameters
         self.wp_idx = 0 # waypoint index
         self.carpose = np.zeros(3) # [x, y, yaw]
@@ -112,31 +99,8 @@ class WaypointsFollower():
 	self.serial_command = "A+0000+0000"
         self.imuread = "I+00000+00000+00000U"
         # methods
-        self._sub_laser = rospy.Subscriber("/scan", LaserScan, self.lidarCB)
         self._sub_amcl = rospy.Subscriber('amcl_pose', PoseWithCovarianceStamped, self.amclCB)
         self._ser_cmd_pub = rospy.Publisher('/serial_command', String, queue_size = 1)
-
-    def lidarCB(self, data):
-        ''' Callback function for amcl '''
-        rospy.loginfo("\n$$$ Lidar readings come in $$$\n")
-        self.scan_range = data.ranges # look ahead angle from -30 to +30 degrees
-        self.meanrange_n30p30 = sum(self.scan_range[420:661])/len(self.scan_range[420:661])
-        alpha_left = math.atan2(self.scan_range[660]*math.cos(math.radians(60))-self.scan_range[900],
-                                  self.scan_range[660]*math.sin(math.radians(60)))
-        self.dist2wall_left = self.scan_range[900] * math.cos(alpha_left)
-        alpha_right = math.atan2(self.scan_range[420]*math.cos(math.radians(60))-self.scan_range[180],
-                                  self.scan_range[420]*math.sin(math.radians(60)))
-        self.dist2wall_right = self.scan_range[180] * math.cos(alpha_right)
-        self.err_left = -self.dist2wall_left + BASE_LINE
-        self.derr_left = self.err_left - self.prerr_left 
-        self.prerr_left = self.err_left
-        self.err_right = self.dist2wall_right - BASE_LINE
-        self.derr_right = -self.err_right + self.prerr_right
-        self.prerr_right = self.err_right
-        print("\n$$$ average distance ahead (-30~+30): ", self.meanrange_n30p30, " $$$\n")
-        print("\n$$$ distance to left wall: ", self.dist2wall_left, " distance to right wall: ", self.dist2wall_right, "$$$\n")
-        print("\n$$$ left wall to baseline error: ", self.err_left, "right wall to baseline error: ", self.err_right,
-              "\n$$$ left wall to baseline error change: ", self.derr_left, "right wall to baseline error change: ", self.derr_right, " $$$\n")
 
     def amclCB(self, data):
         ''' Callback function for amcl '''
@@ -155,38 +119,38 @@ class WaypointsFollower():
             self.x = self.carpose[0]
             self.y = self.carpose[1]
             self.phi = self.carpose[2]
+            self.derr_dist = 0
+            self.derr_ang = 0
             rospy.loginfo("\n~~~Car pose updated by AMCL~~~\n")
         print("\n~~~Estimated car pose: ", self.carpose, "~~~\n")
         print("\n~~~Reference car pose by AMCL: ", self.carpose_ref, "~~~\n")
         print("\n~~~Driving towards waypoint %d: " % (self.wp_idx), self.next_waypoint, "~~~\n")
 
-    def wall_follow(self):
-        if sum(self.scan_range[420:541])/len(self.scan_range[420:541]) < sum(self.scan_range[540:661])/len(self.scan_range[540:661]): # if closer to right wall, follow left wall
-            self.V_steer = KP_WF*self.err_left + KD_WF*self.derr_left # control for left wall follow
-        else: # if closer to left wall, follow right wall
-            self.V_steer = KP_WF*self.err_right + KD_WF*self.derr_right # control for right wall follow
-
     def readIMU(self):
         if console_ser.inWaiting()>0:
             self.imuread = console_ser.read(22)
             print("IMU read: ", self.imuread)
-            if not self.imuread.find('--') == -1: # hard bump happened
-                self.imuread = "I+0000+0000+16384U\r\n"
-                print("...restarting IMU...")
-                console_ser.close()
-                console_ser.open()
-                imuinfo = console_ser.read(62)
-                console_ser.write("IMU0")
-                console_ser.write("IMU1")
-                print(imuinfo)
-                self._sub_amcl
-            else:
+            try:
                 self.acc_x = (float(self.imuread[1:7]) - ACC_X_REF) / G
                 if math.fabs(self.acc_x) < 0.05:
                     self.acc_x = 0.
                 self.acc_y = (float(self.imuread[7:13]) - ACC_Y_REF) / G
                 if math.fabs(self.acc_y) < 0.05:
                     self.acc_y = 0
+            except:
+                self.imuread = "I+00000+00000+00000U"
+                self.carpose = self.carpose_ref
+                self.xdot = 0
+                self.ydot = 0
+                self.phidot = 0
+                self.derr_dist = 0
+                self.derr_ang = 0
+                ready = False
+                while not ready:
+                    if not console_ser.read(1) == '\n':
+                        console_ser.read(1)
+                    else:
+                        ready = True
 
     def updateCarPose(self, dt = 1 / PUBLISH_RATE):
         self.readIMU()
@@ -220,37 +184,32 @@ class WaypointsFollower():
     def computeControl(self):
         ''' Compute V_steer and V_throttle using PD control
             V = Kp*err + Kd*derr '''
-        if self.meanrange_n30p30 < 0.5: # if too close to wall
-            print("\n $$$ wall follow mode $$$\n")
-            self.wall_follow() # execute wall following instead of waypoint tracking
-        else: # not close to wall, execute waypoint tracking
-            print("\n --- waypoing track mode ---\n")
-            if not isNearby(self.carpose[0:2], self.next_waypoint):
+        if not isNearby(self.carpose[0:2], self.next_waypoint):
+            self.computeErrors()
+        else:
+            if self.wp_idx < WPS.shape[0]-1:
+                self.wp_idx += 1
+                self.next_waypoint = WPS[self.wp_idx]
+                print("---car gets close to the waypoint---\nload in next waypoint: ", self.next_waypoint, "----\n")
                 self.computeErrors()
+                self.derr_dist = 0
+                self.derr_ang = 0
             else:
-                if self.wp_idx < WPS.shape[0]-1:
-                    self.wp_idx += 1
-                    self.next_waypoint = WPS[self.wp_idx]
-                    print("---car gets close to the waypoint---\nload in next waypoint: ", self.next_waypoint, "----\n")
-                    self.computeErrors()
-                    self.derr_dist = 0
-                    self.derr_ang = 0
-                else:
-                   self.clean_shutdown()
-                   print("Destination reached!\n---")
-            self.V_throttle = KP_DIST*self.err_dist + KD_DIST*self.derr_dist
-            self.V_steer = KP_THETA*self.err_ang + KD_THETA*self.derr_ang
-            # make sure gas control in range
-            if self.V_throttle > 360:
-                self.V_throttle = 360
-            elif self.V_throttle < 0:
-                self.V_throttle = 0
-            # make sure steering in range
-            if self.V_steer > 50:
-                self.V_steer = 50
-            elif self.V_steer < -50:
-                self.V_steer = -50
-            self.generateCommand()
+               self.clean_shutdown()
+               print("Destination reached!\n---")
+        self.V_throttle = KP_DIST*self.err_dist + KD_DIST*self.derr_dist
+        self.V_steer = KP_THETA*self.err_ang + KD_THETA*self.derr_ang
+        # make sure gas control in range
+        if self.V_throttle > 300:
+            self.V_throttle = 300
+        elif self.V_throttle < 0:
+            self.V_throttle = 0
+        # make sure steering in range
+        if self.V_steer > 50:
+            self.V_steer = 50
+        elif self.V_steer < -50:
+            self.V_steer = -50
+        self.generateCommand()
 
     def generateCommand(self):
         ''' Generate serial command according to V_steer and V_throttle'''

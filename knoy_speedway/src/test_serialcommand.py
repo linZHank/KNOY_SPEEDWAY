@@ -14,12 +14,12 @@ console_ser.open()
 
 def main():
     rospy.init_node('test_serialcommand')
-    for i in range(4000):
-        console_ser.write('A+0000+0156')
+    for i in range(5000):
+        console_ser.write('A+1000+0500')
         print("iter: ", i)
     console_ser.write('A+0000+0000')
     rospy.on_shutdown(clean_shutdown)
-    #rospy.spin()
+    rospy.spin()
 
 if __name__=='__main__':
     main()
