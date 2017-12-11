@@ -57,15 +57,15 @@ BASE_LINE = 0.5
 G = 16384 / 9.81 # gravitational acceleration in IMU reading
 KP_THETA = .15 # waypoint tracking PID: Kp governs steering angle 
 KD_THETA = 55 # waypoint tracking PID: Kd governs steering angle
-KP_DIST = 300 # waypoint tracking PID: Kp governs linear velocity
-KD_DIST = 100  # waypoint tracking PID: Kd governs linear velocity
+KP_DIST = 400 # waypoint tracking PID: Kp governs linear velocity
+KD_DIST = 10000  # waypoint tracking PID: Kd governs linear velocity
 PUBLISH_RATE = 150.0 # number of control commands to be published per second
 DT = 1 / PUBLISH_RATE # time interval 
 waypointsfile = './waypointsfiles/handmade_1211.txt'
 WPS = load_wpfile(waypointsfile) # wapoints in numpy array
 
 # Test if two points are close 
-def isNearby(point1, point2, threshold = 1):
+def isNearby(point1, point2, threshold = .95):
     ''' Test if two points are close to each other '''
     # np.linalg.norm(self.next_waypoint[0:2]-self.current_pose[0:2]) < 0.25
     flag = np.linalg.norm(point1-point2) < threshold
@@ -200,8 +200,8 @@ class WaypointsFollower():
         self.V_throttle = KP_DIST*self.err_dist + KD_DIST*self.derr_dist
         self.V_steer = KP_THETA*self.err_ang + KD_THETA*self.derr_ang
         # make sure gas control in range
-        if self.V_throttle > 300:
-            self.V_throttle = 300
+        if self.V_throttle > 400:
+            self.V_throttle = 400
         elif self.V_throttle < 0:
             self.V_throttle = 0
         # make sure steering in range
