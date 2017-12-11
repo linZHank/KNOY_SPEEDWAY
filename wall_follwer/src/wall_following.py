@@ -41,7 +41,7 @@ class WallFollower():
         self.err = 0
         self.err_pre = 0
 	self.cmd = String()
-           
+
     # Compute PID control according to tilted angle
     def lidarCB(self, data):
         # Compute car orientation
@@ -59,12 +59,12 @@ class WallFollower():
         self.V_theta = KP*self.err + KD*self.derr # control
         self.err_pre = self.err
         print("Control theta: ", self.V_theta)
-        
+
         if self.V_theta < 0:
             self.ser_str = "A"+"%05d" %(self.V_theta*2048/50)+"+0200"
         else:
             self.ser_str = "A+"+"%04d" %(self.V_theta*2048/50)+"+0200"
-    
+
 
     def pub_ser_cmd(self):
         ''' Perform wall following '''
