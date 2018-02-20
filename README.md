@@ -1,16 +1,6 @@
 # ECET581 - "ROS Programming" course project
 
-## What we have done
-* Wall following with PD control regarding to LiDAR reading from "/scan"
-* Drop waypoints on the hallmap, manually
-    * Tried to follow the waypoints with PID control regarding to orientation error and distance error(we have tried fixed distance), but not working well
-    > I guess we should use some extra information (like imu readings) to estimate car pose between two consecutive AMCL readings
-
-## What we need to do next(according to LinZ's imagination)
-1. Map cartesian coordinates to the grid world.
-> An example of getting the grid map can be found in "/path/to/map_follower/src/map_listener.py"
-2. Path-Planning within the grid world
-> LinZ is working on this part currently, trying to figure out with  A\*\-search
-3. Generate waypoints in cartesian coordinate system, automatically, according to step\-2
-4. PID control following waypoints with IMU estimations
-> You can experiment this part with manually set waypoints as in "path/to/map_follower/src/man_wp_follow.py"
+The course was finished with a dead Hokuyo Lidar. Reason?
+1. LinZ threw the car down to the ground from a 10000 feet tall desk. At that moment the lidar might have broken into a state of eccentric spinning.
+2. When we ran the car at low speed, the car's head slightly turn to left that made us thinking of the problem of IMU or making a little angle turning the car slightly to its right.
+3. The eccentric spinning may cause the lidar mistakenly recognize the scale of the map later.
